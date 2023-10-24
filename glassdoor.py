@@ -4,12 +4,8 @@ from collections import OrderedDict
 import pandas as pd
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
-from playwright_stealth import stealth_async
-import asyncio
-from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
-
-
+from playwright_stealth import stealth_sync
+from concurrent.futures import ThreadPoolExecutor
 
 
 final_companies = open('finalglassdoorcompanies.csv', 'a', newline='', encoding='utf-8')
@@ -19,49 +15,43 @@ df_companies = pd.read_csv('glassdoordata.csv', sep='\t')
 all_companies = df_companies.iloc[:, 0].to_list()
 
 
-async def main():
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False, slow_mo=50)
-        context = await browser.new_context(
-            viewport={ 'width': 1280, 'height': 1024 },
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
-            java_script_enabled=True
-        )
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True, slow_mo=50)
+    context = browser.new_context(
+        viewport={ 'width': 1280, 'height': 1024 },
+        user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
+        java_script_enabled=True
+    )
 
-        new_page = await context.new_page()
+    def newPage(company_dict):
+        companyName = company_dict['conm']
+        print('new page called:', companyName)
+        new_page = context.new_page()
+        stealth_sync(new_page)
+        new_page.goto(f'https://www.glassdoor.com/Search/results.htm?keyword={companyName}')
+        print('---nor')
+        soup = BeautifulSoup(new_page.content(), 'html.parser')
+        # print(soup)
 
-        stealth_async()
+        first_company = soup.find('a', class_='company-tile')
+        print(first_company)
 
-        def newPage(company_dict, page):
-            companyName = company_dict['conm']
-            print('new page called:', companyName)
-            new_page = browser.new_page()
-            new_page.goto(f'https://www.glassdoor.com/Search/results.htm?keyword={companyName}')
-            time.sleep(20)
-            new_page.screenshot(path='ss.png')
-            print(new_page.content())
+        if first_company:
+            CompanyIDString = first_company['data-brandviews']
 
-            soup = BeautifulSoup(new_page.content(), 'html.parser')
-            print(soup)
+            # Actual data required
+            company_dict['ResultCompanyID'] = CompanyIDString.split('eid=')[-1]
+            company_dict['ResultCompanyName'] = first_company.find('h3', class_='d-sm-block').text
+            writer.writerow(company_dict)
+            new_page.close()
 
-            # first_company = soup.find('a', class_='company-tile')
-            # print(first_company)
-            # if first_company:
-            #     CompanyIDString = first_company['data-brandviews']
+    # for company in df_companies.to_dict(orient="records")[1:]:
+    #     company = OrderedDict(company)
+    #     newPage(company)
 
-            #     # Actual data required
-            #     company_dict['ResultCompanyID'] = CompanyIDString.split('eid=')[-1]
-            #     company_dict['ResultCompanyName'] = first_company.find('h3', class_='d-sm-block').text
-            #     writer.writerow(company_dict)
-            #     print(company_dict['ResultCompanyName'])
-            
-            #     new_page.close()
-
-        for company_dic in df_companies.to_dict(orient="records")[:1]:
-            company_dic = OrderedDict(company_dic)
-            print(company_dic)
-            newPage(company_dic, new_page)
-
+    inputs = [OrderedDict(company) for company in df_companies.to_dict(orient="records")[1:]]
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        executor.map(newPage, inputs)
 
 
 # page = browser.new_page()
